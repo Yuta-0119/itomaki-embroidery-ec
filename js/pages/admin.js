@@ -120,9 +120,11 @@ IT.pages = IT.pages || {};
                   約${(it.design.stitchCount||0).toLocaleString()}針</span>
                 <span>つかう糸: ${threads}</span>
                 <span style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;">
-                  <button class="btn btn-secondary btn-sm" data-dl="svg" data-i="${i}">${IT.ui.icon('download')} ステッチSVG</button>
-                  <button class="btn btn-ghost btn-sm" data-dl="png" data-i="${i}">${IT.ui.icon('download')} プレビューPNG</button>
-                  <button class="btn btn-ghost btn-sm" data-dl="spec" data-i="${i}">${IT.ui.icon('download')} 仕様書JSON</button>
+                  <button class="btn btn-primary btn-sm" data-dl="pes" data-i="${i}" title="ブラザー刺しゅうPRO / PE-Design で開いて編集できます">${IT.ui.icon('download')} 刺しゅうPRO用 PES</button>
+                  <button class="btn btn-secondary btn-sm" data-dl="dst" data-i="${i}" title="業務用ミシン・外注入稿の標準形式">${IT.ui.icon('download')} DST</button>
+                  <button class="btn btn-ghost btn-sm" data-dl="svg" data-i="${i}">${IT.ui.icon('download')} SVG</button>
+                  <button class="btn btn-ghost btn-sm" data-dl="png" data-i="${i}">${IT.ui.icon('download')} PNG</button>
+                  <button class="btn btn-ghost btn-sm" data-dl="spec" data-i="${i}">${IT.ui.icon('download')} 仕様書</button>
                 </span>
               </div>
             </div>`;

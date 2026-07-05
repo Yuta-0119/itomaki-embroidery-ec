@@ -516,7 +516,7 @@ window.IT = window.IT || {};
     const cos = Math.cos(theta), sin = Math.sin(theta);
 
     const K = result.palette.length;
-    const groups = Array.from({length: K}, (_, c) => ({ cluster: c, segs: [] }));
+    const groups = Array.from({length: K}, (_, c) => ({ cluster: c, segs: [], under: [] }));
 
     const labelAt = (xMm, yMm) => {
       const ix = Math.floor(xMm / cellMm), iy = Math.floor(yMm / cellMm);
@@ -557,43 +557,66 @@ window.IT = window.IT || {};
       }
     } else {
       // ---- タタミ縫い（平行ステッチ + レンガ状オフセット）----
-      const rowGap = wt.lineMm * dn.f;
-      const su = Math.min(cellMm * 0.5, 0.4);   // スキャン刻み
-      const sLen = wt.stitchMm;
-      let rowIdx = 0;
-      for (let v = vMin + rowGap/2; v <= vMax; v += rowGap, rowIdx++){
-        const phase = (rowIdx % 2) * sLen / 2;
-        let runC = -1, runStart = 0;
-        const flush = (uEnd) => {
-          if (runC < 0) return;
-          const runLen = uEnd - runStart;
-          if (runLen < 0.5){ runC = -1; return; }
-          // ステッチ境界（レンガ配置: uMin基準の絶対位相）
-          let pos = runStart;
-          const segs = groups[runC].segs;
-          while (pos < uEnd - 0.01){
-            let next = pos + (sLen - ((pos - uMin + phase) % sLen));
-            if (next - pos < sLen * 0.3) next += sLen;           // 極端な短針を避ける
-            next = Math.min(next, uEnd);
-            const jv = (rnd() - 0.5) * 0.14;
-            const [x1, y1] = toXY(pos,  v + jv);
-            const [x2, y2] = toXY(next, v + jv);
-            segs.push(x1, y1, x2, y2);
-            stitchCount++;
-            pos = next;
-          }
-          runC = -1;
-        };
-        for (let u = uMin; u <= uMax + su; u += su){
-          const [x, y] = toXY(u, v);
-          const c = u > uMax ? -1 : labelAt(x, y);
-          if (c !== runC){
-            flush(u);
-            if (c >= 0){ runC = c; runStart = u; }
-          }
+      // scanHatch: 角度・間隔を変えて走査するヘルパー
+      //   本縫い（表に見えるステッチ）と、下打ち（アンダーレイ:
+      //   生地を安定させ本縫いの沈み込みを防ぐ、まばらな下地縫い）で共用
+      const scanHatch = (thetaScan, rowGap, sLen, conf) => {
+        const cosS = Math.cos(thetaScan), sinS = Math.sin(thetaScan);
+        let uMinS = Infinity, uMaxS = -Infinity, vMinS = Infinity, vMaxS = -Infinity;
+        for (const [x, y] of corners){
+          const u = x*cosS + y*sinS, v = -x*sinS + y*cosS;
+          if (u < uMinS) uMinS = u; if (u > uMaxS) uMaxS = u;
+          if (v < vMinS) vMinS = v; if (v > vMaxS) vMaxS = v;
         }
-        flush(uMax);
-      }
+        const toXYS = (u, v) => [u*cosS - v*sinS, u*sinS + v*cosS];
+        const su = Math.min(cellMm * 0.5, 0.4);
+        let rowIdx = 0;
+        for (let v = vMinS + rowGap/2; v <= vMaxS; v += rowGap, rowIdx++){
+          const phase = conf.brick ? (rowIdx % 2) * sLen / 2 : 0;
+          let runC = -1, runStart = 0;
+          const flush = (uEnd) => {
+            if (runC < 0) return;
+            // 下打ちは端を内側へ / 本縫いは引き縮み補正で端をわずかに外へ
+            let s0 = runStart - conf.comp + conf.inset;
+            let s1 = uEnd + conf.comp - conf.inset;
+            if (s1 - s0 < conf.minRun){ runC = -1; return; }
+            let pos = s0;
+            const segs = groups[runC][conf.target];
+            while (pos < s1 - 0.01){
+              let next = pos + (sLen - ((pos - uMinS + phase) % sLen));
+              if (next - pos < sLen * 0.3) next += sLen;   // 極端な短針を避ける
+              next = Math.min(next, s1);
+              const jv = conf.jitter ? (rnd() - 0.5) * 0.14 : 0;
+              const [x1, y1] = toXYS(pos,  v + jv);
+              const [x2, y2] = toXYS(next, v + jv);
+              segs.push(x1, y1, x2, y2);
+              if (conf.count) stitchCount++;
+              pos = next;
+            }
+            runC = -1;
+          };
+          for (let u = uMinS; u <= uMaxS + su; u += su){
+            const [x, y] = toXYS(u, v);
+            const c = u > uMaxS ? -1 : labelAt(x, y);
+            if (c !== runC){
+              flush(u);
+              if (c >= 0){ runC = c; runStart = u; }
+            }
+          }
+          flush(uMaxS);
+        }
+      };
+
+      // 本縫い: ユーザー指定の角度・密度。引き縮み補正 0.18mm
+      scanHatch(theta, wt.lineMm * dn.f, wt.stitchMm, {
+        target: 'segs', brick: true, jitter: true,
+        comp: 0.18, inset: 0, minRun: 0.5, count: true,
+      });
+      // 下打ち: 本縫いと直交・3mm間隔のまばらな走り縫い。ふちの内側 0.5mm
+      scanHatch(theta + Math.PI / 2, 3.0, 3.8, {
+        target: 'under', brick: false, jitter: false,
+        comp: 0, inset: 0.5, minRun: 1.5, count: false,
+      });
     }
 
     return { wMm, hMm, lineMm: wt.lineMm, style: params.style, groups, stitchCount };

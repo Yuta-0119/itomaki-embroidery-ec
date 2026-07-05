@@ -49,6 +49,20 @@ IT.pages = IT.pages || {};
           color: item.colorId, size: item.size || null, placement: item.placement },
       });
     },
+    /** ミシン用シーケンス（縫い順・止め縫い・下打ちを含む納品プラン） */
+    buildPlan(item, order){
+      const { result, sd } = this.reconstruct(item.design);
+      const name = order ? order.id.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) : 'itomaki';
+      return IT.plan.compile(sd, result, { name });
+    },
+    /** 刺しゅうPRO / PE-Design 用 PESファイル */
+    pesBytes(item, order){
+      return IT.machine.writePes(this.buildPlan(item, order));
+    },
+    /** タジマDSTファイル（業務用ミシン・外注入稿用） */
+    dstBytes(item, order){
+      return IT.machine.writeDst(this.buildPlan(item, order));
+    },
     pngDataUrl(item, px = 900){
       const { result, sd } = this.reconstruct(item.design);
       const cv = document.createElement('canvas');
@@ -60,15 +74,23 @@ IT.pages = IT.pages || {};
     specText(item, order){
       const p = IT.productById[item.productId];
       const color = p && p.colors.find(c => c.id === item.colorId);
-      // 実際のステッチから糸ごとの針数を算出（SVGと必ず一致させる）
-      const { result, sd } = this.reconstruct(item.design);
-      const threads = sd.groups
-        .filter(g => g.segs.length > 0)
-        .map(g => {
-          const th = IT.threadById[result.palette[g.cluster].threadId];
-          return { code: th.code, name: th.name, hex: th.hex, stitches: g.segs.length / 4 };
-        })
-        .sort((a, b) => b.stitches - a.stitches);
+      // 実際のステッチから糸ごとの針数を算出（SVG・PES・DSTと必ず一致させる）
+      const plan = this.buildPlan(item, order);
+      const pec = IT.machine.pecColors(plan.blocks);
+      const threads = plan.blocks.map((bl, i) => ({
+        code: bl.code, name: bl.name, hex: bl.hex,
+        stitches: bl.stitches,
+        brother: { index: pec[i].index, name: pec[i].name },  // 刺しゅうPRO上の糸番号
+      }));
+      const machine = {
+        formats: ['PES(刺しゅうPRO/PE-Design)', 'DST(タジマ)', 'SVG(実寸)'],
+        totalStitches: plan.stats.stitches,      // 下打ち・止め縫い込みの実針数
+        colorChanges: plan.stats.colorChanges,
+        trims: plan.stats.trims,
+        underlay: 'あり（本縫いと直交・3mm間隔）',
+        pullCompensationMm: 0.18,
+        sizeMm: plan.size,
+      };
       return JSON.stringify({
         order: order ? { id: order.id, createdAt: order.createdAt } : null,
         product: { id: item.productId, name: p ? p.name : '', color: color ? color.label : item.colorId, size: item.size || null },
@@ -83,6 +105,7 @@ IT.pages = IT.pages || {};
           angle: item.design.params.angle,
           threads,
         },
+        machine,
         placement: item.placement,
         price: item.price,
       }, null, 2);

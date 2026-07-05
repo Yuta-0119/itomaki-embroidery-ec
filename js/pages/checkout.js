@@ -270,8 +270,9 @@ IT.pages = IT.pages || {};
                   <b>${p ? IT.esc(p.name) : ''}</b> ×${it.qty}<br>
                   <span class="muted">${it.design.params.style === 'cross' ? 'クロスステッチ' : 'タタミぬい'}・${(it.design.widthMm/10).toFixed(1)}cm・約${(it.design.stitchCount||0).toLocaleString()}針</span><br>
                   <span class="dl-row" style="justify-content:flex-start; margin-top:6px;">
-                    <button class="btn btn-ghost btn-sm" data-dl="svg" data-i="${i}">${IT.ui.icon('download')} 刺繍データ(SVG)</button>
-                    <button class="btn btn-ghost btn-sm" data-dl="png" data-i="${i}">${IT.ui.icon('download')} PNG</button>
+                    <button class="btn btn-ghost btn-sm" data-dl="pes" data-i="${i}" title="刺しゅうPRO / 家庭用ブラザーミシン用">${IT.ui.icon('download')} 刺繍データ(PES)</button>
+                    <button class="btn btn-ghost btn-sm" data-dl="dst" data-i="${i}">${IT.ui.icon('download')} DST</button>
+                    <button class="btn btn-ghost btn-sm" data-dl="svg" data-i="${i}">${IT.ui.icon('download')} SVG</button>
                     <button class="btn btn-ghost btn-sm" data-dl="spec" data-i="${i}">${IT.ui.icon('download')} 仕様書</button>
                   </span>
                 </div>
@@ -309,7 +310,11 @@ IT.pages = IT.pages || {};
   IT.downloadDesign = function(item, order, kind){
     const base = `itomaki_${order ? order.id : 'design'}_${item.productId}`;
     try{
-      if (kind === 'svg'){
+      if (kind === 'pes'){
+        IT.ui.downloadBytes(`${base}.pes`, IT.designIO.pesBytes(item, order));
+      } else if (kind === 'dst'){
+        IT.ui.downloadBytes(`${base}.dst`, IT.designIO.dstBytes(item, order));
+      } else if (kind === 'svg'){
         IT.ui.downloadText(`${base}.svg`, IT.designIO.svgText(item), 'image/svg+xml');
       } else if (kind === 'png'){
         IT.ui.downloadDataUrl(`${base}.png`, IT.designIO.pngDataUrl(item));

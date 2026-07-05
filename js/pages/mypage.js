@@ -57,6 +57,7 @@ IT.pages = IT.pages || {};
                 <span class="muted">${(it.design.widthMm/10).toFixed(1)}cm ・ 糸${it.design.palette.filter(t=>t.count>0).length}色</span>
               </div>
               <span class="dl-row" style="margin:0;">
+                <button class="btn btn-ghost btn-sm" data-dl="pes" data-i="${i}" title="刺しゅうPRO用PES">${IT.ui.icon('download')} PES</button>
                 <button class="btn btn-ghost btn-sm" data-dl="svg" data-i="${i}" title="刺繍データSVG">${IT.ui.icon('download')} SVG</button>
                 <button class="btn btn-ghost btn-sm" data-dl="spec" data-i="${i}" title="仕様書JSON">${IT.ui.icon('download')} 仕様</button>
               </span>
