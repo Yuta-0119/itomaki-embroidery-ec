@@ -1,0 +1,13 @@
+# ローカル用（プレビューサーバ設定など）
+.claude/
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+$RECYCLE.BIN/
+
+# エディタ
+.vscode/
+*.swp
