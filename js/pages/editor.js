@@ -102,7 +102,7 @@ IT.pages = IT.pages || {};
       colorId: product.colors.some(c => c.id === q.color) ? q.color : product.colors[0].id,
       size: product.sizes ? (product.sizes.includes(q.size) ? q.size : 'M') : null,
       srcCanvas: null, srcName: '', srcThumb: '',
-      params: { style:'tatami', colors:6, weight:'normal', density:'normal', angle:45, removeBg:false, bgTol:40 },
+      params: { style:'tatami', colors:6, weight:'normal', density:'normal', angle:45, removeBg:false, bgTol:40, lineBoost:true },
       place: { zoneId: product.zones[0].id, dx:0, dy:0, widthMm: product.zones[0].defWmm, rot:0 },
       qty: 1,
       result: null, sd: null,
@@ -295,6 +295,7 @@ IT.pages = IT.pages || {};
       const auto = IT.emb.autoParams(canvas);
       E.params.colors = auto.colors;
       E.params.removeBg = auto.removeBg;
+      E.params.lineBoost = auto.lineBoost;
       renderSourcePanel();
       renderAdjustPanel();
       runAnalyze();
@@ -318,7 +319,15 @@ IT.pages = IT.pages || {};
         </div>
         <div class="ctrl">
           <div class="ctrl-label">${IT.ui.icon('palette')} 糸のいろかず <span class="val" id="colors-val">${P.colors}色</span></div>
-          <input type="range" id="colors-range" min="2" max="10" step="1" value="${P.colors}">
+          <input type="range" id="colors-range" min="2" max="12" step="1" value="${P.colors}">
+        </div>
+        <div class="ctrl">
+          <label class="toggle">
+            <input type="checkbox" id="lineboost-toggle" ${P.lineBoost?'checked':''}>
+            <span class="tgl-track"></span>
+            <span style="font-weight:700; font-size:.9rem;">線をくっきり残す
+              <span class="small" style="color:var(--ink-faint); font-weight:500;">（イラスト・顔・文字むけ）</span></span>
+          </label>
         </div>
         <div class="ctrl">
           <div class="ctrl-label">${IT.ui.icon('density')} 糸のふとさ</div>
@@ -377,6 +386,10 @@ IT.pages = IT.pages || {};
         E.params.angle = +v;
         scheduleRender(80);
       });
+      $('#lineboost-toggle').addEventListener('change', e => {
+        E.params.lineBoost = e.target.checked;
+        runAnalyze();
+      });
       $('#removebg-toggle').addEventListener('change', e => {
         E.params.removeBg = e.target.checked;
         $('#bgtol-wrap').style.display = e.target.checked ? '' : 'none';
@@ -405,6 +418,7 @@ IT.pages = IT.pages || {};
       const auto = IT.emb.autoParams(E.srcCanvas);
       E.params.colors = auto.colors;
       E.params.removeBg = auto.removeBg;
+      E.params.lineBoost = auto.lineBoost;
       renderAdjustPanel();
       runAnalyze();
       IT.ui.toast('画像に合わせて調整しました', 'wand');

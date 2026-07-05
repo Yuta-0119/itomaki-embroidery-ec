@@ -16,8 +16,9 @@ window.IT = window.IT || {};
 (function(){
   'use strict';
 
-  const CELLS_MAX = 120;       // ラベルマップの最大セル数（長辺）
-  const KMEANS_ITERS = 8;
+  const CELLS_MAX = 168;       // ラベルマップの最大セル数（長辺）
+  const SS = 3;                // 1セルあたり3×3サブピクセルで解析（細い線の検出用）
+  const KMEANS_ITERS = 10;
 
   // ---- 固定シード乱数（決定性の要）----
   function mulberry32(seed){
@@ -85,39 +86,91 @@ window.IT = window.IT || {};
 
   /**
    * @param {HTMLCanvasElement} srcCanvas loadSource() の結果
-   * @param {object} opts { colors:2-10, removeBg:bool, bgTol:0-100 }
+   * @param {object} opts { colors:2-12, removeBg:bool, bgTol:0-100, lineBoost:bool }
    * @returns {object} result {
    *   W,H, labels:Int16Array(-1=背景),
    *   palette:[{threadId,count}], coverage, srcAspect
    * }
    */
   function analyze(srcCanvas, opts){
-    const K = Math.max(2, Math.min(10, opts.colors || 6));
+    const K = Math.max(2, Math.min(12, opts.colors || 6));
+    const lineBoost = opts.lineBoost !== false;   // 省略時ON（イラスト向け既定）
     const aspect = srcCanvas.height / srcCanvas.width;
     let W, H;
     if (aspect >= 1){ H = CELLS_MAX; W = Math.max(8, Math.round(CELLS_MAX / aspect)); }
     else            { W = CELLS_MAX; H = Math.max(8, Math.round(CELLS_MAX * aspect)); }
 
-    const small = downscale(srcCanvas, W, H);
-    const data = small.getContext('2d').getImageData(0, 0, W, H).data;
+    // 3×3サブピクセルで統計を取る（平均だけだと細い線・小さな目が消える）
+    const SW = W * SS, SH = H * SS;
+    const small = downscale(srcCanvas, SW, SH);
+    const data = small.getContext('2d').getImageData(0, 0, SW, SH).data;
     const N = W * H;
 
-    // ピクセル配列（半透明は白の上に合成した色として扱う）
     const R = new Float32Array(N), G = new Float32Array(N), B = new Float32Array(N);
-    const bg = new Uint8Array(N);   // 1 = 背景
+    const bg = new Uint8Array(N);                 // 1 = 背景
+    const dR = new Float32Array(N), dG = new Float32Array(N), dB = new Float32Array(N); // セル内最暗色
+    const darkFrac = new Float32Array(N);         // 暗いサブピクセルの割合
+    const darkDelta = new Float32Array(N);        // 平均輝度 − 最暗輝度
     let hasAlpha = false;
-    for (let i = 0; i < N; i++){
-      const a = data[i*4+3] / 255;
-      if (a < 0.95) hasAlpha = true;
-      R[i] = data[i*4]   * a + 255 * (1 - a);
-      G[i] = data[i*4+1] * a + 255 * (1 - a);
-      B[i] = data[i*4+2] * a + 255 * (1 - a);
-      if (a < 0.5) bg[i] = 1;      // PNG等の透過はそのまま背景
+
+    const lumas = new Float32Array(SS * SS);
+    for (let cy = 0; cy < H; cy++){
+      for (let cx = 0; cx < W; cx++){
+        const ci = cy * W + cx;
+        let sr = 0, sg = 0, sb = 0, aSum = 0, n = 0;
+        let minL = 1e9, mr = 255, mg = 255, mb = 255;
+        for (let sy = 0; sy < SS; sy++){
+          const rowBase = ((cy * SS + sy) * SW + cx * SS) * 4;
+          for (let sx = 0; sx < SS; sx++){
+            const p = rowBase + sx * 4;
+            const a = data[p + 3] / 255;
+            if (a < 0.95) hasAlpha = true;
+            // 半透明は白の上に合成した色として扱う
+            const r = data[p]     * a + 255 * (1 - a);
+            const g = data[p + 1] * a + 255 * (1 - a);
+            const b = data[p + 2] * a + 255 * (1 - a);
+            const L = 0.299 * r + 0.587 * g + 0.114 * b;
+            lumas[n] = L;
+            sr += r; sg += g; sb += b; aSum += a; n++;
+            if (L < minL){ minL = L; mr = r; mg = g; mb = b; }
+          }
+        }
+        R[ci] = sr / n; G[ci] = sg / n; B[ci] = sb / n;
+        dR[ci] = mr; dG[ci] = mg; dB[ci] = mb;
+        const meanL = 0.299 * R[ci] + 0.587 * G[ci] + 0.114 * B[ci];
+        let dc = 0;
+        for (let k = 0; k < n; k++) if (lumas[k] < meanL - 46) dc++;
+        darkFrac[ci] = dc / n;
+        darkDelta[ci] = meanL - minL;
+        if (aSum / n < 0.5) bg[ci] = 1;           // PNG等の透過はそのまま背景
+      }
     }
 
-    // --- 背景除去（外周からの領域拡張）---
+    // --- OKLab配列（背景判定・減色・糸マッピングをすべて知覚色差で行う） ---
+    const OK = new Float32Array(N * 3);
+    const setOk = i => {
+      const o = IT.color.srgbToOklab(R[i], G[i], B[i]);
+      OK[i*3] = o[0]; OK[i*3+1] = o[1]; OK[i*3+2] = o[2];
+    };
+    for (let i = 0; i < N; i++) setOk(i);
+
+    // --- 背景除去（境界リングモデル + 領域拡張 + 白フチ浸食） ---
     if (opts.removeBg && !hasAlpha){
-      floodBackground(R, G, B, bg, W, H, opts.bgTol == null ? 40 : opts.bgTol);
+      floodBackground(OK, bg, W, H, opts.bgTol == null ? 40 : opts.bgTol);
+    }
+
+    // --- 線画強調: 暗い線が通るセルは暗色側に寄せて、輪郭・目・文字を保持 ---
+    if (lineBoost){
+      for (let i = 0; i < N; i++){
+        if (bg[i]) continue;
+        if (darkDelta[i] > 48 && darkFrac[i] >= 0.08){
+          const w = Math.min(0.7, darkFrac[i] * 2.2) * Math.min(1, (darkDelta[i] - 48) / 80);
+          R[i] = R[i] * (1 - w) + dR[i] * w;
+          G[i] = G[i] * (1 - w) + dG[i] * w;
+          B[i] = B[i] * (1 - w) + dB[i] * w;
+          setOk(i);
+        }
+      }
     }
 
     // --- 減色対象ピクセル収集 ---
@@ -127,146 +180,249 @@ window.IT = window.IT || {};
       return { W, H, labels: new Int16Array(N).fill(-1), palette: [], coverage: 0, srcAspect: aspect };
     }
 
-    // --- メディアンカットで初期中心 → k-means ---
-    let cents = medianCutSeeds(R, G, B, idxs, K);
-    cents = kmeans(R, G, B, idxs, cents);
+    // --- オーバークラスタリング(K+6) → 知覚的マージで K 色へ ---
+    // 面積の小さい部分（目・口・ワンポイント）も、色が際立っていれば
+    // 独立クラスタとして生き残れる
+    const K2 = Math.min(16, K + 6);
+    let cents = medianCutSeeds(OK, idxs, K2);
+    cents = kmeans(OK, idxs, cents);
+    let clusters = buildClusters(OK, R, G, B, idxs, cents).filter(c => c.count > 0);
 
-    // --- ラベル割当 ---
+    while (clusters.length > K){
+      let bi = 0, bj = 1, bd = Infinity;
+      for (let i = 0; i < clusters.length; i++){
+        for (let j = i + 1; j < clusters.length; j++){
+          const d = IT.color.dist2(clusters[i].ok, clusters[j].ok);
+          if (d < bd){ bd = d; bi = i; bj = j; }
+        }
+      }
+      const a = clusters[bi], b = clusters[bj];
+      const total = a.count + b.count;
+      for (let ch = 0; ch < 3; ch++){
+        a.ok[ch] = (a.ok[ch] * a.count + b.ok[ch] * b.count) / total;
+      }
+      a.r = (a.r * a.count + b.r * b.count) / total;
+      a.g = (a.g * a.count + b.g * b.count) / total;
+      a.b = (a.b * a.count + b.b * b.count) / total;
+      a.count = total;
+      clusters.splice(bj, 1);
+    }
+
+    // --- ラベル割当（統合後の重心で再割当） ---
     const labels = new Int16Array(N).fill(-1);
     for (const i of idxs){
+      const o0 = OK[i*3], o1 = OK[i*3+1], o2 = OK[i*3+2];
       let best = 0, bd = Infinity;
-      for (let c = 0; c < cents.length; c++){
-        const dr = R[i]-cents[c][0], dg = G[i]-cents[c][1], db = B[i]-cents[c][2];
-        const d = dr*dr*2 + dg*dg*4 + db*db*3;
+      for (let c = 0; c < clusters.length; c++){
+        const ok = clusters[c].ok;
+        const d0 = o0-ok[0], d1 = o1-ok[1], d2 = o2-ok[2];
+        const d = d0*d0 + d1*d1 + d2*d2;
         if (d < bd){ bd = d; best = c; }
       }
       labels[i] = best;
     }
 
-    // --- ノイズ除去（3×3多数決 ×2 + ピンホール埋め）---
-    majorityFilter(labels, W, H, 2);
+    // --- ノイズ除去（コントラスト保護つき多数決 + ピンホール埋め） ---
+    majorityFilter(labels, W, H, clusters, 2);
 
-    // --- クラスタ → 糸マッピング（重複回避）---
-    const counts = new Array(cents.length).fill(0);
+    // --- クラスタ → 糸マッピング（重複回避・OKLab色差） ---
+    const counts = new Array(clusters.length).fill(0);
     for (let i = 0; i < N; i++) if (labels[i] >= 0) counts[labels[i]]++;
 
-    const order = cents.map((_, c) => c).sort((a, b) => counts[b] - counts[a]);
+    const order = clusters.map((_, c) => c).sort((a, b) => counts[b] - counts[a]);
     const used = new Set();
-    const threadOf = new Array(cents.length).fill(null);
+    const threadOf = new Array(clusters.length).fill(null);
     for (const c of order){
       if (counts[c] === 0) continue;
-      const t = IT.nearestThread(cents[c][0], cents[c][1], cents[c][2], used) ||
-                IT.nearestThread(cents[c][0], cents[c][1], cents[c][2], null);
+      const t = IT.nearestThread(clusters[c].r, clusters[c].g, clusters[c].b, used) ||
+                IT.nearestThread(clusters[c].r, clusters[c].g, clusters[c].b, null);
       threadOf[c] = t.id;
       used.add(t.id);
     }
 
-    const palette = cents.map((_, c) => ({ threadId: threadOf[c], count: counts[c] }));
+    const palette = clusters.map((_, c) => ({ threadId: threadOf[c], count: counts[c] }));
     const covered = counts.reduce((s, v) => s + v, 0);
 
     return { W, H, labels, palette, coverage: covered / N, srcAspect: aspect };
   }
 
-  /** 外周シードの領域拡張で背景を推定 */
-  function floodBackground(R, G, B, bg, W, H, tol){
-    // 四隅 8×8 の平均色をシード色に
-    const corners = [[0,0],[W-8,0],[0,H-8],[W-8,H-8]].map(([sx,sy]) => {
-      let r=0,g=0,b=0,n=0;
-      for (let y=sy; y<Math.min(H,sy+8); y++)
-        for (let x=sx; x<Math.min(W,sx+8); x++){
-          const i=y*W+x; r+=R[i]; g+=G[i]; b+=B[i]; n++;
+  /** クラスタ統計（OKLab重心・sRGB重心・件数）を作る */
+  function buildClusters(OK, R, G, B, idxs, cents){
+    const K = cents.length;
+    const sum = Array.from({ length: K }, () => [0,0,0, 0,0,0, 0]);
+    for (const i of idxs){
+      const o0 = OK[i*3], o1 = OK[i*3+1], o2 = OK[i*3+2];
+      let best = 0, bd = Infinity;
+      for (let c = 0; c < K; c++){
+        const d0 = o0-cents[c][0], d1 = o1-cents[c][1], d2 = o2-cents[c][2];
+        const d = d0*d0 + d1*d1 + d2*d2;
+        if (d < bd){ bd = d; best = c; }
+      }
+      const s = sum[best];
+      s[0] += o0; s[1] += o1; s[2] += o2;
+      s[3] += R[i]; s[4] += G[i]; s[5] += B[i];
+      s[6]++;
+    }
+    return sum.map(s => ({
+      ok: s[6] ? [s[0]/s[6], s[1]/s[6], s[2]/s[6]] : [0,0,0],
+      r: s[6] ? s[3]/s[6] : 0,
+      g: s[6] ? s[4]/s[6] : 0,
+      b: s[6] ? s[5]/s[6] : 0,
+      count: s[6],
+    }));
+  }
+
+  /**
+   * 背景除去（白抜き）:
+   *  1. 画像の外周リングから背景色モデルを最大3つ推定（グラデ・角ごとの色違いに対応）
+   *  2. 外周から領域拡張。モデル一致 or「なだらかに連続 + ゆるいモデル一致」で伸ばす
+   *  3. 被写体のふちに残るにじみ（アンチエイリアスの白フチ）を浸食して除去
+   * 内側に閉じた白（目の白目など）は外周とつながらないため残る。
+   */
+  function floodBackground(OK, bg, W, H, tol){
+    const N = W * H;
+    // --- 1) 背景色モデル ---
+    const models = [];
+    const addSample = i => {
+      if (bg[i]) return;
+      const o0 = OK[i*3], o1 = OK[i*3+1], o2 = OK[i*3+2];
+      for (const m of models){
+        const d0 = o0-m.ok[0], d1 = o1-m.ok[1], d2 = o2-m.ok[2];
+        if (d0*d0 + d1*d1 + d2*d2 < 0.0049){   // ≈ΔE 0.07 以内は同一モデル
+          m.n++;
+          m.ok[0] += (o0 - m.ok[0]) / m.n;
+          m.ok[1] += (o1 - m.ok[1]) / m.n;
+          m.ok[2] += (o2 - m.ok[2]) / m.n;
+          return;
         }
-      return [r/n, g/n, b/n];
-    });
-    const t2 = Math.pow(30 + tol * 2.2, 2);  // tol 0-100 → 距離しきい値
-    const near = (i, c) => {
-      const dr=R[i]-c[0], dg=G[i]-c[1], db=B[i]-c[2];
-      return (dr*dr*2 + dg*dg*4 + db*db*3) / 9 < t2;
+      }
+      if (models.length < 6) models.push({ ok: [o0, o1, o2], n: 1 });
     };
+    for (let x = 0; x < W; x++){ addSample(x); addSample((H-1)*W + x); }
+    for (let y = 1; y < H-1; y++){ addSample(y*W); addSample(y*W + W-1); }
+    models.sort((a, b) => b.n - a.n);
+    models.length = Math.min(models.length, 3);
+    if (!models.length) return;
+
+    const T = 0.05 + tol / 100 * 0.30;   // tol 0-100 → OKLab ΔE しきい値
+    const T2 = T * T;
+    const modelD2 = i => {
+      const o0 = OK[i*3], o1 = OK[i*3+1], o2 = OK[i*3+2];
+      let best = Infinity;
+      for (const m of models){
+        const d0 = o0-m.ok[0], d1 = o1-m.ok[1], d2 = o2-m.ok[2];
+        const d = d0*d0 + d1*d1 + d2*d2;
+        if (d < best) best = d;
+      }
+      return best;
+    };
+    const pxD2 = (i, j) => {
+      const d0 = OK[i*3]-OK[j*3], d1 = OK[i*3+1]-OK[j*3+1], d2 = OK[i*3+2]-OK[j*3+2];
+      return d0*d0 + d1*d1 + d2*d2;
+    };
+
+    // --- 2) 外周から領域拡張 ---
+    const seen = new Uint8Array(N);
     const queue = [];
-    const seen = new Uint8Array(W*H);
-    // 外周すべてをシード候補に
-    for (let x=0; x<W; x++){
-      for (const y of [0, H-1]){
-        const i = y*W+x;
-        for (const c of corners) if (near(i,c)){ queue.push([i,c]); seen[i]=1; break; }
-      }
-    }
-    for (let y=0; y<H; y++){
-      for (const x of [0, W-1]){
-        const i = y*W+x;
-        if (!seen[i]) for (const c of corners) if (near(i,c)){ queue.push([i,c]); seen[i]=1; break; }
-      }
-    }
+    const trySeed = i => {
+      if (!seen[i] && modelD2(i) < T2){ seen[i] = 1; queue.push(i); }
+    };
+    for (let x = 0; x < W; x++){ trySeed(x); trySeed((H-1)*W + x); }
+    for (let y = 0; y < H; y++){ trySeed(y*W); trySeed(y*W + W-1); }
+    const localT2 = T2 * 0.25;   // となりと色がほぼ連続なら…
+    const looseT2 = T2 * 3.6;    // …モデルからΔE 1.9倍まで背景として許容（影・グラデ対応）
     while (queue.length){
-      const [i, c] = queue.pop();
+      const i = queue.pop();
       bg[i] = 1;
       const x = i % W, y = (i / W) | 0;
-      const nb = [];
-      if (x>0) nb.push(i-1);
-      if (x<W-1) nb.push(i+1);
-      if (y>0) nb.push(i-W);
-      if (y<H-1) nb.push(i+W);
-      for (const j of nb){
-        if (!seen[j] && near(j, c)){ seen[j] = 1; queue.push([j, c]); }
+      const nbs = [];
+      if (x > 0) nbs.push(i-1);
+      if (x < W-1) nbs.push(i+1);
+      if (y > 0) nbs.push(i-W);
+      if (y < H-1) nbs.push(i+W);
+      for (const j of nbs){
+        if (seen[j]) continue;
+        if (modelD2(j) < T2 || (pxD2(i, j) < localT2 && modelD2(j) < looseT2)){
+          seen[j] = 1;
+          queue.push(j);
+        }
       }
+    }
+
+    // --- 3) 白フチ（にじみ）の浸食除去 ---
+    const haloT2 = T2 * 1.55;
+    for (let pass = 0; pass < 2; pass++){
+      const kill = [];
+      for (let i = 0; i < N; i++){
+        if (bg[i]) continue;
+        const x = i % W, y = (i / W) | 0;
+        const nearBg =
+          (x > 0 && bg[i-1]) || (x < W-1 && bg[i+1]) ||
+          (y > 0 && bg[i-W]) || (y < H-1 && bg[i+W]);
+        if (nearBg && modelD2(i) < haloT2) kill.push(i);
+      }
+      if (!kill.length) break;
+      for (const i of kill) bg[i] = 1;
     }
   }
 
-  /** メディアンカット: 初期クラスタ中心を安定的に決める */
-  function medianCutSeeds(R, G, B, idxs, K){
+  /** メディアンカット（OKLab）: 初期クラスタ中心を安定的に決める */
+  function medianCutSeeds(OK, idxs, K){
     let boxes = [idxs.slice()];
     while (boxes.length < K){
-      // いちばん分散の大きい箱を選ぶ
+      // いちばん色の広がりが大きい箱を選ぶ
       let bi = -1, bRange = -1, bCh = 0;
       for (let i = 0; i < boxes.length; i++){
         const box = boxes[i];
         if (box.length < 2) continue;
-        const mins = [255,255,255], maxs = [0,0,0];
-        for (const p of box){
-          if (R[p]<mins[0])mins[0]=R[p]; if (R[p]>maxs[0])maxs[0]=R[p];
-          if (G[p]<mins[1])mins[1]=G[p]; if (G[p]>maxs[1])maxs[1]=G[p];
-          if (B[p]<mins[2])mins[2]=B[p]; if (B[p]>maxs[2])maxs[2]=B[p];
-        }
         for (let ch = 0; ch < 3; ch++){
-          const r = maxs[ch]-mins[ch];
-          if (r > bRange){ bRange = r; bi = i; bCh = ch; }
+          let mn = Infinity, mx = -Infinity;
+          for (const p of box){
+            const v = OK[p*3+ch];
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+          }
+          // a/b チャンネルはレンジが狭いので少し重みづけ
+          const range = (mx - mn) * (ch === 0 ? 1 : 1.4);
+          if (range > bRange){ bRange = range; bi = i; bCh = ch; }
         }
       }
-      if (bi < 0 || bRange < 4) break;   // これ以上分けられない
+      if (bi < 0 || bRange < 0.02) break;   // これ以上分けられない
       const box = boxes[bi];
-      const chan = bCh === 0 ? R : bCh === 1 ? G : B;
-      box.sort((a, b) => chan[a] - chan[b]);
+      const ch = bCh;
+      box.sort((a, b) => OK[a*3+ch] - OK[b*3+ch]);
       const mid = box.length >> 1;
       boxes.splice(bi, 1, box.slice(0, mid), box.slice(mid));
     }
     return boxes.map(box => {
-      let r=0,g=0,b=0;
-      for (const p of box){ r+=R[p]; g+=G[p]; b+=B[p]; }
-      return [r/box.length, g/box.length, b/box.length];
+      let l = 0, a = 0, b = 0;
+      const n = box.length || 1;
+      for (const p of box){ l += OK[p*3]; a += OK[p*3+1]; b += OK[p*3+2]; }
+      return [l/n, a/n, b/n];
     });
   }
 
-  function kmeans(R, G, B, idxs, cents){
+  function kmeans(OK, idxs, cents){
     const K = cents.length;
     const asg = new Int16Array(idxs.length);
     for (let it = 0; it < KMEANS_ITERS; it++){
       // 割当
       for (let n = 0; n < idxs.length; n++){
         const i = idxs[n];
-        let best=0, bd=Infinity;
+        const o0 = OK[i*3], o1 = OK[i*3+1], o2 = OK[i*3+2];
+        let best = 0, bd = Infinity;
         for (let c = 0; c < K; c++){
-          const dr=R[i]-cents[c][0], dg=G[i]-cents[c][1], db=B[i]-cents[c][2];
-          const d = dr*dr*2 + dg*dg*4 + db*db*3;
+          const d0 = o0-cents[c][0], d1 = o1-cents[c][1], d2 = o2-cents[c][2];
+          const d = d0*d0 + d1*d1 + d2*d2;
           if (d < bd){ bd = d; best = c; }
         }
         asg[n] = best;
       }
       // 更新
-      const sum = Array.from({length:K}, () => [0,0,0,0]);
+      const sum = Array.from({length: K}, () => [0,0,0,0]);
       for (let n = 0; n < idxs.length; n++){
         const i = idxs[n], s = sum[asg[n]];
-        s[0]+=R[i]; s[1]+=G[i]; s[2]+=B[i]; s[3]++;
+        s[0] += OK[i*3]; s[1] += OK[i*3+1]; s[2] += OK[i*3+2]; s[3]++;
       }
       for (let c = 0; c < K; c++){
         if (sum[c][3] > 0){
@@ -277,8 +433,13 @@ window.IT = window.IT || {};
     return cents;
   }
 
-  /** 3×3多数決フィルタ + 背景ピンホール埋め */
-  function majorityFilter(labels, W, H, passes){
+  /**
+   * 3×3多数決フィルタ（コントラスト保護つき）+ 背景ピンホール埋め
+   * JPEGノイズやにじみは均す一方で、まわりと色が大きく違う細部
+   * （目・口・輪郭線）は多数派に飲み込まれないよう保護する。
+   */
+  function majorityFilter(labels, W, H, clusters, passes){
+    const PROTECT2 = 0.085 * 0.085;   // ΔEがこれ以上離れた細部は残す
     const tmp = new Int16Array(labels.length);
     for (let p = 0; p < passes; p++){
       tmp.set(labels);
@@ -301,8 +462,14 @@ window.IT = window.IT || {};
             votes[tmp[i]] = (votes[tmp[i]]||0) + 1;
             let bestL = tmp[i], bestV = -1;
             for (const k in votes){ if (votes[k] > bestV){ bestV = votes[k]; bestL = +k; } }
-            // 周囲がほぼ背景なら孤立点として消す
-            labels[i] = (nonBg <= 2) ? -1 : bestL;
+            if (nonBg <= 2){
+              labels[i] = -1;   // 背景に浮いた孤立点は消す
+            } else if (bestL !== tmp[i] &&
+                       IT.color.dist2(clusters[tmp[i]].ok, clusters[bestL].ok) >= PROTECT2){
+              labels[i] = tmp[i];   // 色が大きく違う細部 → 保護
+            } else {
+              labels[i] = bestL;
+            }
           } else {
             // 背景セル: 周囲がほぼ同色ならピンホールとして埋める
             if (nonBg >= total - 1 && nonBg > 0){
@@ -604,7 +771,7 @@ ${paths.join('\n')}
   // =============================================================
 
   function autoParams(srcCanvas){
-    const S = 48;
+    const S = 64;
     const small = downscale(srcCanvas, S, S);
     const d = small.getContext('2d').getImageData(0, 0, S, S).data;
     const hist = {};
@@ -619,7 +786,12 @@ ${paths.join('\n')}
     const sorted = Object.values(hist).sort((a, b) => b - a);
     let cum = 0, n = 0;
     for (const v of sorted){ cum += v; n++; if (cum >= total * 0.93) break; }
-    const colors = Math.max(2, Math.min(9, n));
+
+    // 色数が少ない = イラスト/ロゴ/キャラ、多い = 写真 とざっくり判定
+    const isIllust = n <= 26;
+    const colors = isIllust
+      ? Math.max(4, Math.min(10, n))
+      : 10;                              // 写真は多色で階調を出す（上限はスライダーで12まで）
 
     // 四隅が似た色なら背景除去を提案（透過画像なら不要）
     let removeBg = false;
@@ -637,9 +809,9 @@ ${paths.join('\n')}
         const dd = Math.abs(cs[i][0]-cs[j][0]) + Math.abs(cs[i][1]-cs[j][1]) + Math.abs(cs[i][2]-cs[j][2]);
         maxD = Math.max(maxD, dd);
       }
-      removeBg = maxD < 90;   // 四隅がほぼ同色 → 単色背景と判断
+      removeBg = maxD < 110;   // 四隅がほぼ同色 → 単色背景と判断
     }
-    return { colors, removeBg };
+    return { colors, removeBg, lineBoost: isIllust };
   }
 
   // =============================================================

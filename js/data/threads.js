@@ -64,6 +64,31 @@ IT.THREADS = [
   { id:'t48', code:'IT-48', name:'ラベンダー',  hex:'#D9CBE8' },
 ];
 
+// ---- 色ユーティリティ（OKLab: 知覚的に均等な色空間） ----
+IT.color = (function(){
+  function lin(c){
+    c /= 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+  /** sRGB(0-255) → OKLab [L, a, b]（Lは0〜1） */
+  function srgbToOklab(r, g, b){
+    const lr = lin(r), lg = lin(g), lb = lin(b);
+    const l = Math.cbrt(0.4122214708*lr + 0.5363325363*lg + 0.0514459929*lb);
+    const m = Math.cbrt(0.2119034982*lr + 0.6806995451*lg + 0.1073969566*lb);
+    const s = Math.cbrt(0.0883024619*lr + 0.2817188376*lg + 0.6299787005*lb);
+    return [
+      0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+      1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+      0.0259040371*l + 0.7827717662*m - 0.8086757660*s,
+    ];
+  }
+  function dist2(a, b){
+    const d0 = a[0]-b[0], d1 = a[1]-b[1], d2 = a[2]-b[2];
+    return d0*d0 + d1*d1 + d2*d2;
+  }
+  return { srgbToOklab, dist2, dist: (a, b) => Math.sqrt(dist2(a, b)) };
+})();
+
 // ---- ユーティリティ ----
 IT.threadById = {};
 IT.THREADS.forEach(t => {
@@ -71,20 +96,20 @@ IT.THREADS.forEach(t => {
   t.r = parseInt(h.slice(1,3),16);
   t.g = parseInt(h.slice(3,5),16);
   t.b = parseInt(h.slice(5,7),16);
+  t.ok = IT.color.srgbToOklab(t.r, t.g, t.b);
   IT.threadById[t.id] = t;
 });
 
 /**
- * RGB → いちばん近い糸を返す（redmean 近似色差）
+ * RGB → いちばん近い糸を返す（OKLab 知覚色差）
  * excludeIds: すでに使われた糸を避けたいときに指定
  */
 IT.nearestThread = function(r, g, b, excludeIds){
+  const ok = IT.color.srgbToOklab(r, g, b);
   let best = null, bestD = Infinity;
   for (const t of IT.THREADS){
     if (excludeIds && excludeIds.has(t.id)) continue;
-    const rm = (r + t.r) / 2;
-    const dr = r - t.r, dg = g - t.g, db = b - t.b;
-    const d = (2 + rm/256) * dr*dr + 4 * dg*dg + (2 + (255-rm)/256) * db*db;
+    const d = IT.color.dist2(ok, t.ok);
     if (d < bestD){ bestD = d; best = t; }
   }
   return best;
