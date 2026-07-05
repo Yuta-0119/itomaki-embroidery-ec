@@ -166,6 +166,7 @@ IT.pages = IT.pages || {};
               ${IT.productArt(product.id, color().hex)}
               <div class="zone-outline" id="zone-outline"><span class="zone-name" id="zone-name"></span></div>
               <canvas class="emb-overlay" id="overlay" style="display:none;" aria-label="刺繍の配置。ドラッグで移動"></canvas>
+              <div class="size-tag" id="size-tag" aria-hidden="true"></div>
             </div>
             <p class="stage-hint">刺繍をドラッグすると位置を動かせます</p>
           </div>
@@ -692,6 +693,23 @@ IT.pages = IT.pages || {};
       IT.placeOverlay(stage, overlay, E.product, zone(), E.place,
         { wMm: E.sd.wMm, hMm: E.sd.hMm }, 1.5);
       positionZoneOutline();
+      positionSizeTag();
+    }
+
+    /** 刺繍の直下に「実寸◯cm」のバッジを表示（サイズ感を実感できるように） */
+    function positionSizeTag(){
+      const tag = $('#size-tag');
+      if (!tag) return;
+      if (!E.sd){ tag.style.display = 'none'; return; }
+      const vb = IT.productViewBox(E.product.id);
+      const ppm = E.product.pxPerMm;
+      const z = zone();
+      const cxU = z.cx + E.place.dx * ppm;
+      const bottomU = z.cy + E.place.dy * ppm + (E.sd.hMm / 2 + 4) * ppm;
+      tag.style.left = ((cxU - vb.x) / vb.w * 100) + '%';
+      tag.style.top = ((bottomU - vb.y) / vb.h * 100) + '%';
+      tag.textContent = `←→ 実寸 よこ${(E.sd.wMm / 10).toFixed(1)}cm`;
+      tag.style.display = '';
     }
 
     function positionZoneOutline(){

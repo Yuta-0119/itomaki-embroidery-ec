@@ -586,6 +586,18 @@ svg.product-art{ width:100%; height:auto; }
 .zone-outline{ position:absolute; border:2px dashed rgba(217,127,140,.55); border-radius:8px;
   pointer-events:none; opacity:0; transition:opacity .2s; }
 .zone-outline.show{ opacity:1; }
+.size-tag{
+  position:absolute; z-index:6;
+  transform:translate(-50%, 2px);
+  font-family:var(--font-hand); font-size:.72rem; font-weight:700;
+  color:var(--pink-deep);
+  background:rgba(255,253,248,.92);
+  border:1.5px dashed var(--pink);
+  border-radius:var(--r-pill);
+  padding:1px 10px;
+  white-space:nowrap; pointer-events:none;
+  display:none;
+}
 .zone-outline .zone-name{
   position:absolute; top:-24px; left:50%; transform:translateX(-50%);
   font-size:.72rem; color:var(--pink-deep); background:var(--pink-soft);

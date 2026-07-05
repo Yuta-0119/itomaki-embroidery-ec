@@ -91,8 +91,52 @@ window.IT = window.IT || {};
    *   W,H, labels:Int16Array(-1=背景),
    *   palette:[{threadId,count}], coverage, srcAspect
    * }
+   *
+   * 余白の大きい画像（写真の中央に小さくロゴ、など）は
+   * 1回目の解析で被写体の範囲を特定 → 切り抜いて再解析する2パス方式。
+   * 解析グリッド168セルを被写体だけに使えるため、文字や細部の
+   * 実効解像度が大きく上がり、サイズ指定もモチーフ実寸に一致する。
    */
   function analyze(srcCanvas, opts){
+    const first = analyzeOnce(srcCanvas, opts);
+    if (opts.noCrop || !first.palette.length) return first;
+
+    // 被写体のバウンディングボックス（セル座標）
+    const { W, H, labels } = first;
+    let minX = W, minY = H, maxX = -1, maxY = -1;
+    for (let y = 0; y < H; y++){
+      for (let x = 0; x < W; x++){
+        if (labels[y*W + x] >= 0){
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return first;
+    const bw = maxX - minX + 1, bh = maxY - minY + 1;
+    // 余白が少なければそのまま（両軸とも82%以上を使えている場合）
+    if ((bw >= W * 0.82 && bh >= H * 0.82) || bw < 8 || bh < 8) return first;
+
+    // セル座標 → 元画像ピクセルへ（3セルぶんの余裕をつけて切り抜き）
+    const sx = srcCanvas.width / W, sy = srcCanvas.height / H;
+    const pad = 3;
+    const cx0 = Math.max(0, Math.floor((minX - pad) * sx));
+    const cy0 = Math.max(0, Math.floor((minY - pad) * sy));
+    const cx1 = Math.min(srcCanvas.width,  Math.ceil((maxX + 1 + pad) * sx));
+    const cy1 = Math.min(srcCanvas.height, Math.ceil((maxY + 1 + pad) * sy));
+    if (cx1 - cx0 < 16 || cy1 - cy0 < 16) return first;
+
+    const cropped = document.createElement('canvas');
+    cropped.width = cx1 - cx0;
+    cropped.height = cy1 - cy0;
+    cropped.getContext('2d').drawImage(srcCanvas,
+      cx0, cy0, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
+
+    // 切り抜き後にフル解像度で再解析
+    return analyzeOnce(cropped, opts);
+  }
+
+  function analyzeOnce(srcCanvas, opts){
     const K = Math.max(2, Math.min(12, opts.colors || 6));
     const lineBoost = opts.lineBoost !== false;   // 省略時ON（イラスト向け既定）
     const aspect = srcCanvas.height / srcCanvas.width;
@@ -363,6 +407,16 @@ window.IT = window.IT || {};
       }
       if (!kill.length) break;
       for (const i of kill) bg[i] = 1;
+    }
+
+    // --- 4) 囲まれた背景色の除去（文字の輪っかの中など） ---
+    // 「あ」「ひ」のループ内側のように、外周とつながっていなくても
+    // 背景とほぼ同色（ごく厳しめのしきい値）のセルは布地を見せる。
+    // 少しでも色みが違う部分（クリーム色の吸盤・淡い模様）は残る。
+    const tight = Math.min(T * 0.5, 0.05);
+    const tight2 = tight * tight;
+    for (let i = 0; i < N; i++){
+      if (!bg[i] && modelD2(i) < tight2) bg[i] = 1;
     }
   }
 
@@ -812,8 +866,11 @@ ${paths.join('\n')}
 
     // 色数が少ない = イラスト/ロゴ/キャラ、多い = 写真 とざっくり判定
     const isIllust = n <= 26;
+    // 色数は「面積の大半を占める色の数」ではなく「有意に存在する色の数」で決める。
+    // ほっぺ・吸盤のような面積1%未満のワンポイント色も1色として数える。
+    const nSig = sorted.filter(v => v >= total * 0.004).length;
     const colors = isIllust
-      ? Math.max(4, Math.min(10, n))
+      ? Math.max(5, Math.min(10, nSig))
       : 10;                              // 写真は多色で階調を出す（上限はスライダーで12まで）
 
     // 四隅が似た色なら背景除去を提案（透過画像なら不要）

@@ -62,6 +62,13 @@ IT.THREADS = [
   { id:'t46', code:'IT-46', name:'すみれ',      hex:'#7D639E' },
   { id:'t47', code:'IT-47', name:'ぶどう',      hex:'#5A3F6E' },
   { id:'t48', code:'IT-48', name:'ラベンダー',  hex:'#D9CBE8' },
+  // ビビッド（イラスト・キャラクターもの向けの鮮やか系）
+  { id:'t49', code:'IT-49', name:'サンゴ',      hex:'#F2705C' },
+  { id:'t50', code:'IT-50', name:'しゅいろ',    hex:'#E4573D' },
+  { id:'t51', code:'IT-51', name:'ローズ',      hex:'#E8476F' },
+  { id:'t52', code:'IT-52', name:'あおぞら',    hex:'#2E86DE' },
+  { id:'t53', code:'IT-53', name:'ひまわり',    hex:'#FFC531' },
+  { id:'t54', code:'IT-54', name:'エメラルド',  hex:'#2EBD85' },
 ];
 
 // ---- 色ユーティリティ（OKLab: 知覚的に均等な色空間） ----
@@ -101,7 +108,9 @@ IT.THREADS.forEach(t => {
 });
 
 /**
- * RGB → いちばん近い糸を返す（OKLab 知覚色差）
+ * RGB → いちばん近い糸を返す（OKLab 知覚色差・彩度/色相を重視）
+ * a/bチャンネルを重み付けすることで「明るさは近いがくすんだ糸」より
+ * 「鮮やかさ・色みが近い糸」を選び、刺繍の発色を原画に寄せる。
  * excludeIds: すでに使われた糸を避けたいときに指定
  */
 IT.nearestThread = function(r, g, b, excludeIds){
@@ -109,7 +118,10 @@ IT.nearestThread = function(r, g, b, excludeIds){
   let best = null, bestD = Infinity;
   for (const t of IT.THREADS){
     if (excludeIds && excludeIds.has(t.id)) continue;
-    const d = IT.color.dist2(ok, t.ok);
+    const dL = ok[0] - t.ok[0];
+    const da = ok[1] - t.ok[1];
+    const db = ok[2] - t.ok[2];
+    const d = dL*dL + 1.7 * (da*da + db*db);
     if (d < bestD){ bestD = d; best = t; }
   }
   return best;

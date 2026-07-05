@@ -18,7 +18,7 @@ IT.PRODUCTS = [
     id:'tshirt', name:'ふんわりコットンTシャツ', category:'wear', price:3200,
     desc:'肉厚すぎず薄すぎない5.6ozの天竺コットン。洗うほどにくったり馴染む、毎日の相棒です。',
     material:'綿100%（5.6oz 天竺）', care:'洗濯ネット使用・裏返し洗いがおすすめ',
-    pxPerMm:0.34,
+    pxPerMm:0.27,
     colors:[
       { id:'kinari',   label:'きなり',     hex:'#F2EBDA' },
       { id:'pink',     label:'くすみピンク', hex:'#EAC8C8' },
@@ -42,7 +42,7 @@ IT.PRODUCTS = [
     id:'sweat', name:'もこもこ裏毛スウェット', category:'wear', price:4800,
     desc:'ふっくら裏毛のあったかスウェット。ゆったりシルエットでおうち時間もお出かけも。',
     material:'綿80% ポリエステル20%（裏毛10oz）', care:'タンブラー乾燥は避けてください',
-    pxPerMm:0.30,
+    pxPerMm:0.28,
     colors:[
       { id:'gray',   label:'杢グレー',     hex:'#CFCBC4' },
       { id:'kinari', label:'きなり',       hex:'#F2EBDA' },
@@ -65,7 +65,7 @@ IT.PRODUCTS = [
     id:'tote', name:'まいにちトートバッグ', category:'goods', price:2400,
     desc:'厚手キャンバスのしっかりトート。A4もお弁当もすっぽり。マチ付きで自立します。',
     material:'綿100%（12ozキャンバス）', care:'汚れは固く絞った布で拭き取り',
-    pxPerMm:0.40,
+    pxPerMm:0.39,
     colors:[
       { id:'kinari',  label:'きなり', hex:'#F0E8D5' },
       { id:'mustard', label:'からし', hex:'#D9B25E' },
@@ -85,7 +85,7 @@ IT.PRODUCTS = [
     id:'towel', name:'ふわふわフェイスタオル', category:'goods', price:1800,
     desc:'今治産のふんわりパイル。刺繍を入れると、毎日の「ただいま」がちょっと嬉しくなる。',
     material:'綿100%（今治タオル）', care:'柔軟剤は少なめが長持ちのコツ',
-    pxPerMm:0.37,
+    pxPerMm:0.38,
     colors:[
       { id:'shiro',  label:'しろ',   hex:'#FBFAF4' },
       { id:'sakura', label:'さくら', hex:'#F6D7DB' },
@@ -135,7 +135,7 @@ IT.PRODUCTS = [
     id:'cap', name:'コットンキャップ', category:'wear', price:3600,
     desc:'やわらかなウォッシュドコットンのキャップ。フロントにワンポイント刺繍を。',
     material:'綿100%（ウォッシュドツイル）', care:'手洗い・陰干し',
-    pxPerMm:1.00,
+    pxPerMm:1.05,
     colors:[
       { id:'kinari', label:'きなり', hex:'#F0E8D5' },
       { id:'khaki',  label:'カーキ', hex:'#9AA183' },
