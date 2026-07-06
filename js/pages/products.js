@@ -70,6 +70,9 @@ IT.pages = IT.pages || {};
         b.classList.toggle('on', b.dataset.cat === cat);
         b.setAttribute('aria-selected', String(b.dataset.cat === cat));
       });
+      // 選択カテゴリをURLに反映（詳細ページから戻っても選択が保持される）
+      // replaceState なら hashchange が発火せず再描画されない
+      history.replaceState(null, '', cat === 'all' ? '#/products' : `#/products?cat=${cat}`);
       renderGrid();
     });
 

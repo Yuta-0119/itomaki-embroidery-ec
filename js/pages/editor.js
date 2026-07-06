@@ -115,23 +115,51 @@ IT.pages = IT.pages || {};
   // =============================================================
   // エディタ本体
   // =============================================================
+  const DRAFT_KEY = 'itomaki_draft_v1';
+
   IT.pages.editor = function(el, params){
     const product = IT.productById[params.productId] || IT.PRODUCTS[0];
     const q = params.query || {};
 
+    // ---- 下書き（同じ商品なら前回の編集を復元）----
+    let draft = null;
+    try{
+      const raw = sessionStorage.getItem(DRAFT_KEY);
+      if (raw){
+        const d = JSON.parse(raw);
+        if (d && d.productId === product.id && d.src) draft = d;
+      }
+    }catch(e){ /* 壊れた下書きは無視 */ }
+
     // ---- 状態 ----
     const E = {
       product,
-      colorId: product.colors.some(c => c.id === q.color) ? q.color : product.colors[0].id,
-      size: product.sizes ? (product.sizes.includes(q.size) ? q.size : 'M') : null,
+      // 明示的なクエリ指定 > 下書き > 既定値
+      colorId: product.colors.some(c => c.id === q.color) ? q.color
+        : (draft && product.colors.some(c => c.id === draft.colorId)) ? draft.colorId
+        : product.colors[0].id,
+      size: product.sizes
+        ? (product.sizes.includes(q.size) ? q.size
+          : (draft && product.sizes.includes(draft.size)) ? draft.size : 'M')
+        : null,
       srcCanvas: null, srcName: '', srcThumb: '',
-      params: { style:'tatami', colors:6, weight:'normal', density:'normal', angle:45, removeBg:false, bgTol:40, lineBoost:true },
-      place: { zoneId: product.zones[0].id, dx:0, dy:0, widthMm: product.zones[0].defWmm, rot:0 },
-      qty: 1,
+      params: Object.assign(
+        { style:'tatami', colors:6, weight:'normal', density:'normal', angle:45, removeBg:false, bgTol:40, lineBoost:true },
+        draft ? draft.params : null),
+      place: Object.assign(
+        { zoneId: product.zones[0].id, dx:0, dy:0, widthMm: product.zones[0].defWmm, rot:0 },
+        draft ? draft.place : null),
+      qty: (draft && draft.qty) || 1,
+      // 「自動割当された糸ID → ユーザーが選んだ糸ID」の対応表。
+      // 色数変更などで再解析しても、ユーザーの糸選びをここから再適用する。
+      threadSwaps: (draft && draft.threadSwaps) || {},
       result: null, sd: null,
       analyzing: false,
       token: 0,
     };
+    if (E.place.zoneId && !product.zones.some(z => z.id === E.place.zoneId)){
+      E.place.zoneId = product.zones[0].id;
+    }
 
     const color = () => E.product.colors.find(c => c.id === E.colorId) || E.product.colors[0];
     const zone = () => E.product.zones.find(z => z.id === E.place.zoneId) || E.product.zones[0];
@@ -303,9 +331,11 @@ IT.pages = IT.pages || {};
       setSource(cv, `サンプル「${s.label}」`);
     }
 
-    function setSource(canvas, name){
+    function setSource(canvas, name, opts){
+      opts = opts || {};
       E.srcCanvas = canvas;
       E.srcName = name;
+      E._srcSmall = null;   // 下書き用キャッシュを破棄
       // サムネイル（96px）
       const t = document.createElement('canvas');
       const sc = 96 / Math.max(canvas.width, canvas.height);
@@ -315,11 +345,14 @@ IT.pages = IT.pages || {};
       g.fillStyle = '#fff'; g.fillRect(0, 0, t.width, t.height);
       g.drawImage(canvas, 0, 0, t.width, t.height);
       E.srcThumb = t.toDataURL('image/jpeg', 0.85);
-      // おまかせ初期調整
-      const auto = IT.emb.autoParams(canvas);
-      E.params.colors = auto.colors;
-      E.params.removeBg = auto.removeBg;
-      E.params.lineBoost = auto.lineBoost;
+      if (!opts.keepParams){
+        // 新しい画像 → おまかせ初期調整（糸の差し替えもリセット）
+        const auto = IT.emb.autoParams(canvas);
+        E.params.colors = auto.colors;
+        E.params.removeBg = auto.removeBg;
+        E.params.lineBoost = auto.lineBoost;
+        E.threadSwaps = {};
+      }
       renderSourcePanel();
       renderAdjustPanel();
       runAnalyze();
@@ -462,20 +495,34 @@ IT.pages = IT.pages || {};
         .filter(x => x.p.count > 0)
         .sort((a, b) => b.p.count - a.p.count);
       if (cnt) cnt.textContent = `${rows.length}色`;
+      const anySwapped = rows.some(({ p }) => p.autoThreadId && p.threadId !== p.autoThreadId);
       list.innerHTML = rows.map(({ p, ci }) => {
         const t = IT.threadById[p.threadId];
+        const swapped = p.autoThreadId && p.threadId !== p.autoThreadId;
         return `
         <button class="thread-item" data-cluster="${ci}" title="クリックで糸をかえる">
           <span class="thread-spool" style="background-color:${t.hex}"></span>
           <span class="thread-info">
-            <span class="thread-name">${t.name} <span class="thread-code">${t.code}</span></span>
+            <span class="thread-name">${t.name} <span class="thread-code">${t.code}</span>
+              ${swapped ? '<span class="tag tag-pink" style="font-size:.64rem; padding:.05em .7em;">えらんだ糸</span>' : ''}</span>
             <span class="thread-share">この糸が ${Math.round(p.count / total * 100)}%</span>
           </span>
           <span class="swap-hint">かえる ▸</span>
         </button>`;
-      }).join('');
+      }).join('') + (anySwapped ? `
+        <button class="btn btn-ghost btn-sm" id="reset-threads" style="justify-self:start;">
+          ${IT.ui.icon('rotate')} 糸をぜんぶ自動にもどす
+        </button>` : '');
       list.querySelectorAll('[data-cluster]').forEach(btn => {
         btn.addEventListener('click', () => openThreadPicker(+btn.dataset.cluster));
+      });
+      const resetBtn = list.querySelector('#reset-threads');
+      if (resetBtn) resetBtn.addEventListener('click', () => {
+        E.threadSwaps = {};
+        E.result.palette.forEach(p => { if (p.autoThreadId) p.threadId = p.autoThreadId; });
+        renderThreadList();
+        scheduleRender(0);
+        IT.ui.toast('自動でえらんだ糸にもどしました', 'rotate');
       });
     }
 
@@ -496,7 +543,12 @@ IT.pages = IT.pages || {};
         </div>`, { title: `${IT.ui.icon('spool')} 糸をえらぶ` });
       m.el.querySelectorAll('[data-tid]').forEach(cell => {
         cell.addEventListener('click', () => {
-          E.result.palette[cluster].threadId = cell.dataset.tid;
+          const entry = E.result.palette[cluster];
+          const auto = entry.autoThreadId || entry.threadId;
+          entry.threadId = cell.dataset.tid;
+          // 意思の記録: 自動割当に戻したら記録も消す
+          if (cell.dataset.tid === auto) delete E.threadSwaps[auto];
+          else E.threadSwaps[auto] = cell.dataset.tid;
           m.close();
           renderThreadList();
           scheduleRender(0);
@@ -557,7 +609,8 @@ IT.pages = IT.pages || {};
         if (!btn) return;
         E.place.zoneId = btn.dataset.zone;
         E.place.dx = 0; E.place.dy = 0;
-        E.place.widthMm = Math.min(zone().defWmm, E.result ? effMaxW() : zone().maxWmm);
+        // ユーザーが決めた大きさは保持し、新しい場所の上限に収まるようにだけ丸める
+        E.place.widthMm = Math.min(E.place.widthMm, E.result ? effMaxW() : zone().maxWmm);
         renderPlacePanel();
         scheduleRender(0);
         flashZone();
@@ -623,6 +676,13 @@ IT.pages = IT.pages || {};
           return;
         }
         if (token !== E.token) return;
+        // 自動割当を記録し、ユーザーの糸差し替えを再適用する
+        // （色数変更などの再解析をまたいでも選んだ糸が保持される）
+        E.result.palette.forEach(p => {
+          p.autoThreadId = p.threadId;
+          const chosen = E.threadSwaps[p.threadId];
+          if (chosen && IT.threadById[chosen]) p.threadId = chosen;
+        });
         if (!E.result.palette.some(p => p.count > 0)){
           E.result = null;
           showLoading(false);
@@ -769,6 +829,47 @@ IT.pages = IT.pages || {};
     // =============================================
     // 価格パネル
     // =============================================
+    // =============================================
+    // 下書きの自動保存（ページを離れて戻っても編集がのこる）
+    // =============================================
+    let draftTimer = null;
+    function scheduleDraftSave(){
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(saveDraft, 900);
+    }
+    function saveDraft(){
+      if (!E.srcCanvas) return;
+      try{
+        if (!E._srcSmall){
+          // 透過を保持するためPNGで保存（サンプル画像など）
+          const s = document.createElement('canvas');
+          const sc = Math.min(1, 800 / Math.max(E.srcCanvas.width, E.srcCanvas.height));
+          s.width = Math.max(1, Math.round(E.srcCanvas.width * sc));
+          s.height = Math.max(1, Math.round(E.srcCanvas.height * sc));
+          s.getContext('2d').drawImage(E.srcCanvas, 0, 0, s.width, s.height);
+          E._srcSmall = s.toDataURL('image/png');
+        }
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
+          productId: E.product.id, colorId: E.colorId, size: E.size, qty: E.qty,
+          params: E.params, place: E.place, threadSwaps: E.threadSwaps,
+          srcName: E.srcName, src: E._srcSmall, savedAt: Date.now(),
+        }));
+      }catch(e){ /* 容量超過などは黙ってスキップ（機能に影響なし） */ }
+    }
+    function restoreDraftImage(){
+      if (!draft) return;
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
+        setSource(c, draft.srcName || '前回の画像', { keepParams: true });
+        IT.ui.toast('前回の編集内容をふくげんしました', 'sparkle');
+      };
+      img.onerror = () => { draft = null; };
+      img.src = draft.src;
+    }
+
     function designSnapshot(){
       return {
         params: { ...E.params },
@@ -809,7 +910,8 @@ IT.pages = IT.pages || {};
             <span class="tag tag-mustard">${IT.ui.icon('truck')} 目安${5 + Math.floor(E.sd.stitchCount * E.qty / 10000)}営業日</span>
           ` : `<span class="tag">画像をえらぶと見積もりが出ます</span>`}
         </div>
-        <button class="btn btn-primary btn-lg" id="add-cart-btn" style="width:100%; margin-top:16px;" ${ready ? '' : 'disabled'}>
+        <button class="btn btn-primary btn-lg" id="add-cart-btn" style="width:100%; margin-top:16px;" ${ready ? '' : 'disabled'}
+          ${ready ? '' : 'title="画像をえらぶと押せるようになります"'}>
           ${IT.ui.icon('cart')} カートにいれる
         </button>
         <p class="small muted center" style="margin-top:10px;">¥6,000以上で送料無料（通常¥520）</p>`;
@@ -817,6 +919,7 @@ IT.pages = IT.pages || {};
       $('#qty-minus').addEventListener('click', () => { E.qty = Math.max(1, E.qty - 1); updatePricePanel(); });
       $('#qty-plus').addEventListener('click', () => { E.qty = Math.min(20, E.qty + 1); updatePricePanel(); });
       $('#add-cart-btn').addEventListener('click', addToCart);
+      scheduleDraftSave();   // 変更のたびに下書きを自動保存（900msデバウンス）
 
       // モバイル固定バーも同期
       const barPrice = $('#bar-price'), barAdd = $('#bar-add');
@@ -921,6 +1024,7 @@ IT.pages = IT.pages || {};
     updatePricePanel();
     positionZoneOutline();
     flashZone();
+    restoreDraftImage();   // 同じ商品の下書きがあれば前回の編集を復元
 
     // モバイル: しあがり全体 ⇔ ぬいめアップ のタブ切替
     const tabsEl = $('#stage-tabs');
