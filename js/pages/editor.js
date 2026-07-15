@@ -40,19 +40,38 @@ IT.pages = IT.pages || {};
       const sd = IT.emb.buildStitches(result, design.params, design.widthMm);
       return { result, sd };
     },
-    svgText(item){
-      const { result, sd } = this.reconstruct(item.design);
+    svgText(item, order){
       const p = IT.productById[item.productId];
-      return IT.emb.toSVG(sd, result, {
+      return IT.plan.toSVG(this.buildPlan(item, order), {
         params: item.design.params,
         product: { id: item.productId, name: p ? p.name : item.productId,
           color: item.colorId, size: item.size || null, placement: item.placement },
       });
     },
-    /** ミシン用シーケンス（縫い順・止め縫い・下打ちを含む納品プラン） */
+    /**
+     * ミシン用シーケンス（縫い順・止め縫い・下打ちを含む納品プラン）。
+     * デジタイザーv2（輪郭ベクトル化 + タタミ/サテン自動分類）で生成し、
+     * 万一失敗した場合は旧方式（画面表示と同じセル走査）に自動で切り替える。
+     */
     buildPlan(item, order){
-      const { result, sd } = this.reconstruct(item.design);
+      const design = item.design;
+      const N = design.labels.w * design.labels.h;
+      const result = {
+        W: design.labels.w, H: design.labels.h,
+        labels: IT.emb.rleDecode(design.labels.rle, N),
+        palette: design.palette,
+      };
       const name = order ? order.id.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) : 'itomaki';
+      // クロスステッチは格子幾何そのままの v1 経路が最適（トリム最少）
+      if (design.params.style !== 'cross'){
+        try{
+          const msd = IT.digitize.build(result, design.params, design.widthMm);
+          return IT.plan.compileMachine(msd, result, { name });
+        }catch(err){
+          console.warn('digitize v2 に失敗したため旧方式で生成します:', err);
+        }
+      }
+      const sd = IT.emb.buildStitches(result, design.params, design.widthMm);
       return IT.plan.compile(sd, result, { name });
     },
     /** 刺しゅうPRO / PE-Design 用 PESファイル */
@@ -83,12 +102,18 @@ IT.pages = IT.pages || {};
         brother: { index: pec[i].index, name: pec[i].name },  // 刺しゅうPRO上の糸番号
       }));
       const machine = {
-        formats: ['PES(刺しゅうPRO/PE-Design)', 'DST(タジマ)', 'SVG(実寸)'],
+        formats: ['PES(刺しゅうPRO/PE-Design)', 'DST(タジマ)', 'SVG(実寸・縫い順)'],
+        digitizer: plan.digitizer === 'v2'
+          ? 'v2（輪郭ベクトル化 / タタミ・サテン自動分類 / 縁取りラン）'
+          : 'v1（セル走査）',
         totalStitches: plan.stats.stitches,      // 下打ち・止め縫い込みの実針数
         colorChanges: plan.stats.colorChanges,
         trims: plan.stats.trims,
-        underlay: 'あり（本縫いと直交・3mm間隔）',
-        pullCompensationMm: 0.18,
+        underlay: plan.digitizer === 'v2'
+          ? 'タタミ: エッジウォーク+直交走り縫い ／ サテン: センターウォーク(+ジグザグ)'
+          : 'あり（本縫いと直交・3mm間隔）',
+        pullCompensationMm: { tatami: 0.18, satin: 0.12 },
+        regions: plan.regions || null,           // 部位内訳（タタミ面/サテン/手差し/省略）
         sizeMm: plan.size,
       };
       return JSON.stringify({

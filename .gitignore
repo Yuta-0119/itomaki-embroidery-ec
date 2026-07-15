@@ -1,6 +1,9 @@
 # ローカル用（プレビューサーバ設定など）
 .claude/
 
+# 検証ハーネスの出力（tools/verify-machine.mjs）
+.verify-out/
+
 # OS
 Thumbs.db
 ehthumbs.db

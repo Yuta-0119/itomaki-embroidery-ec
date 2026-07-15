@@ -315,7 +315,7 @@ IT.pages = IT.pages || {};
       } else if (kind === 'dst'){
         IT.ui.downloadBytes(`${base}.dst`, IT.designIO.dstBytes(item, order));
       } else if (kind === 'svg'){
-        IT.ui.downloadText(`${base}.svg`, IT.designIO.svgText(item), 'image/svg+xml');
+        IT.ui.downloadText(`${base}.svg`, IT.designIO.svgText(item, order), 'image/svg+xml');
       } else if (kind === 'png'){
         IT.ui.downloadDataUrl(`${base}.png`, IT.designIO.pngDataUrl(item));
       } else {
